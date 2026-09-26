@@ -128,7 +128,9 @@ def get_owned_booking(
 
 
 def cancel_booking(db: Session, user: User, booking_id: UUID) -> Booking:
-    booking = get_owned_booking(db, user, booking_id)
+    # Lock the row so a concurrent payment/webhook cannot settle the booking
+    # between this read and the status write below.
+    booking = get_owned_booking(db, user, booking_id, for_update=True)
     if booking.status not in CANCELLABLE_STATUSES:
         raise AppError(
             status_code=409,

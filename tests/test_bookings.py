@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -7,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Booking, BookingStatus, CentreTest
 
-FUTURE_APPOINTMENT = "2026-10-10T10:00:00Z"
+# Computed relative to "now" so the suite does not break once a fixed date passes.
+FUTURE_APPOINTMENT = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _auth_headers(client: TestClient, email: str) -> dict[str, str]:

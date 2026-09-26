@@ -42,9 +42,10 @@ def test_list_centres(client: TestClient) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    names = [item["name"] for item in body]
-    assert names == ["East Lab", "West Lab"]
-    assert {item["id"] for item in body} == {first["id"], second["id"]}
+    # The shared dev database may hold other centres; check ours are present and name-ordered.
+    created = [item for item in body if item["id"] in {first["id"], second["id"]}]
+    assert [item["name"] for item in created] == ["East Lab", "West Lab"]
+    assert set(created[0]) == {"id", "name", "location"}
 
 
 def test_get_centre(client: TestClient) -> None:
@@ -72,9 +73,10 @@ def test_list_tests(client: TestClient) -> None:
     response = client.get("/tests")
 
     assert response.status_code == 200
-    names = [item["name"] for item in response.json()]
-    assert names == ["CBC", "Lipid Panel"]
-    assert {item["id"] for item in response.json()} == {first["id"], second["id"]}
+    # The shared dev database may hold other tests; check ours are present and name-ordered.
+    created = [item for item in response.json() if item["id"] in {first["id"], second["id"]}]
+    assert [item["name"] for item in created] == ["CBC", "Lipid Panel"]
+    assert set(created[0]) == {"id", "name", "description"}
 
 
 def test_get_test(client: TestClient) -> None:

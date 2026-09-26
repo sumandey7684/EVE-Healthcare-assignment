@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -10,7 +11,14 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Payment
 
-FUTURE_APPOINTMENT = "2026-10-10T10:00:00Z"
+
+def _future_iso(days: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Computed relative to "now" so the suite does not break once a fixed date passes.
+FUTURE_APPOINTMENT = _future_iso(30)
+SECOND_APPOINTMENT = _future_iso(31)
 
 
 def _auth_headers(client: TestClient, email: str) -> dict[str, str]:
@@ -312,7 +320,7 @@ def test_duplicate_event_id_protected_by_database_constraint(
         json={
             "centre_id": centre["id"],
             "test_id": test["id"],
-            "appointment_at": "2026-10-11T10:00:00Z",
+            "appointment_at": SECOND_APPOINTMENT,
         },
         headers=headers,
     ).json()
@@ -368,6 +376,61 @@ def test_webhook_correlates_existing_simulated_payment(
     assert len(payments) == 1
     assert payments[0].provider_event_id == "evt_12345"
     assert client.get(f"/bookings/{booking['id']}", headers=headers).json()["status"] == "CONFIRMED"
+
+
+def test_trailing_slash_form_from_assignment_is_served_directly(client: TestClient) -> None:
+    """The assignment names the endpoint `POST /payments/webhook/`; it must not answer with a 307."""
+    headers = _auth_headers(client, "owner@example.com")
+    booking = _create_pending_booking(client, headers)
+
+    response = client.post(
+        "/payments/webhook/",
+        json=_webhook_payload(booking),
+        headers=_webhook_headers(),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+    assert client.get(f"/bookings/{booking['id']}", headers=headers).json()["status"] == "CONFIRMED"
+
+
+def test_payment_id_belonging_to_another_booking_is_rejected(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    headers = _auth_headers(client, "owner@example.com")
+    first = _create_pending_booking(client, headers)
+    first_payment = client.post(
+        "/payments",
+        json={"booking_id": first["id"], "result": "SUCCESS"},
+        headers=headers,
+    ).json()
+
+    centre = client.post("/centres", json={"name": "Other Lab", "location": "Pune"}, headers=headers).json()
+    test = client.post("/tests", json={"name": "Lipid Panel"}, headers=headers).json()
+    client.post(
+        f"/centres/{centre['id']}/tests",
+        json={"test_id": test["id"], "price": "450.00"},
+        headers=headers,
+    )
+    second = client.post(
+        "/bookings",
+        json={"centre_id": centre["id"], "test_id": test["id"], "appointment_at": SECOND_APPOINTMENT},
+        headers=headers,
+    ).json()
+
+    response = client.post(
+        "/payments/webhook",
+        json=_webhook_payload(second, event_id="evt_cross", payment_id=first_payment["id"]),
+        headers=_webhook_headers(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "payment_booking_mismatch"
+    assert client.get(f"/bookings/{second['id']}", headers=headers).json()["status"] == "PENDING"
+    payments = list(db_session.scalars(select(Payment).where(Payment.booking_id == second["id"])).all())
+    assert payments == []
 
 
 def test_invalid_payment_id(client: TestClient) -> None:

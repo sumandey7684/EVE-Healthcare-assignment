@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from threading import Barrier, Thread
 from uuid import uuid4
@@ -20,10 +20,11 @@ from app.models import (
 from app.schemas.booking import BookingCreateRequest
 from app.schemas.payment import PaymentCreateRequest, WebhookEventRequest
 from app.security import hash_password
-from app.services.booking import create_booking
+from app.services.booking import cancel_booking, create_booking
 from app.services.payment import process_webhook, simulate_payment
 
-FUTURE_APPOINTMENT = datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)
+# Computed relative to "now" so the suite does not break once a fixed date passes.
+FUTURE_APPOINTMENT = (datetime.now(timezone.utc) + timedelta(days=30)).replace(microsecond=0)
 
 
 def _seed_user_and_offering() -> tuple[User, DiagnosticCentre, DiagnosticTest]:
@@ -202,6 +203,77 @@ def test_concurrent_active_bookings_are_rejected_by_unique_index() -> None:
             db.close()
     finally:
         _cleanup_offering(user.id, centre.id, test.id)
+
+
+def test_concurrent_cancel_and_payment_never_corrupt_state() -> None:
+    """A cancel racing a payment must end in exactly one of two consistent states.
+
+    Without the row lock in cancel_booking, the cancel could overwrite a booking that
+    a payment had just CONFIRMED, leaving a SUCCESS payment on a CANCELLED booking.
+    """
+    booking = _seed_pending_booking()
+    barrier = Barrier(2)
+    outcomes: dict[str, object] = {}
+
+    def pay() -> None:
+        db = SessionLocal()
+        try:
+            user = db.get(User, booking.user_id)
+            assert user is not None
+            barrier.wait(timeout=5)
+            simulate_payment(
+                db,
+                user,
+                PaymentCreateRequest(booking_id=booking.id, result=PaymentStatus.SUCCESS),
+            )
+            outcomes["pay"] = "ok"
+        except AppError as exc:
+            outcomes["pay"] = exc
+        finally:
+            db.close()
+
+    def cancel() -> None:
+        db = SessionLocal()
+        try:
+            user = db.get(User, booking.user_id)
+            assert user is not None
+            barrier.wait(timeout=5)
+            cancel_booking(db, user, booking.id)
+            outcomes["cancel"] = "ok"
+        except AppError as exc:
+            outcomes["cancel"] = exc
+        finally:
+            db.close()
+
+    try:
+        threads = [Thread(target=pay), Thread(target=cancel)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        winners = [key for key, value in outcomes.items() if value == "ok"]
+        losers = [value for value in outcomes.values() if isinstance(value, AppError)]
+        assert len(winners) == 1
+        assert len(losers) == 1
+        assert losers[0].status_code == 409
+        assert losers[0].code == "invalid_booking_status"
+
+        db = SessionLocal()
+        try:
+            stored = db.get(Booking, booking.id)
+            payments = list(db.scalars(select(Payment).where(Payment.booking_id == booking.id)).all())
+            assert stored is not None
+            if winners == ["pay"]:
+                assert stored.status == BookingStatus.CONFIRMED
+                assert len(payments) == 1
+            else:
+                assert stored.status == BookingStatus.CANCELLED
+                assert payments == []
+        finally:
+            db.close()
+    finally:
+        _cleanup_offering(booking.user_id, booking.centre_id, booking.test_id)
 
 
 def test_concurrent_identical_webhooks_remain_idempotent() -> None:

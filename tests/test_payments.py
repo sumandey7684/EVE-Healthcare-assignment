@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -7,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Booking, Payment, PaymentStatus
 
-FUTURE_APPOINTMENT = "2026-10-10T10:00:00Z"
+# Computed relative to "now" so the suite does not break once a fixed date passes.
+FUTURE_APPOINTMENT = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _auth_headers(client: TestClient, email: str) -> dict[str, str]:
@@ -265,6 +267,23 @@ def test_payment_and_booking_update_are_consistent(
     assert payments[0].status == PaymentStatus.SUCCESS
     assert payments[0].amount == stored_booking.amount
     assert payments[0].provider_event_id is None
+
+
+def test_trailing_slash_form_from_assignment_is_served_directly(client: TestClient) -> None:
+    """The assignment names the endpoint `POST /payments/`; it must not answer with a 307."""
+    headers = _auth_headers(client, "owner@example.com")
+    booking = _create_pending_booking(client, headers)
+
+    response = client.post(
+        "/payments/",
+        json={"booking_id": booking["id"], "result": "SUCCESS"},
+        headers=headers,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "SUCCESS"
+    assert client.get(f"/bookings/{booking['id']}", headers=headers).json()["status"] == "CONFIRMED"
 
 
 def test_client_cannot_supply_payment_amount(client: TestClient) -> None:

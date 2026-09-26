@@ -15,7 +15,11 @@ from app.services.payment import process_webhook, simulate_payment
 router = APIRouter(prefix="/payments", tags=["payments"])
 
 
+# The assignment names these endpoints as `POST /payments/` and
+# `POST /payments/webhook/`. Register the trailing-slash forms as hidden aliases
+# so clients that do not follow 307 redirects (curl without -L, httpx) work too.
 @router.post("/webhook", response_model=WebhookEventResponse)
+@router.post("/webhook/", response_model=WebhookEventResponse, include_in_schema=False)
 def payment_webhook(
     payload: WebhookEventRequest,
     db: Session = Depends(get_db),
@@ -25,6 +29,7 @@ def payment_webhook(
 
 
 @router.post("", response_model=PaymentPublic, status_code=201)
+@router.post("/", response_model=PaymentPublic, status_code=201, include_in_schema=False)
 def create_payment(
     payload: PaymentCreateRequest,
     current_user: User = Depends(get_current_user),

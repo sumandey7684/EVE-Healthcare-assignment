@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class AppError(Exception):
@@ -15,6 +16,16 @@ class AppError(Exception):
 
 
 _SENSITIVE_FIELDS = {"password"}
+
+# Framework-raised HTTP errors (unknown route, wrong method, ...) mapped to stable codes.
+_HTTP_ERROR_CODES = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    405: "method_not_allowed",
+    422: "validation_error",
+}
 
 
 def _json_safe(value: Any) -> Any:
@@ -62,6 +73,37 @@ def register_error_handlers(app: FastAPI) -> None:
                     "code": "validation_error",
                     "message": "Request validation failed.",
                     "details": _sanitize_validation_errors(exc.errors()),
+                }
+            },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(
+        _request: Request,
+        exc: StarletteHTTPException,
+    ) -> JSONResponse:
+        message = exc.detail if isinstance(exc.detail, str) else "Request could not be processed."
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": _HTTP_ERROR_CODES.get(exc.status_code, "http_error"),
+                    "message": message,
+                }
+            },
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSONResponse:
+        # Never leak internals to clients; the exception is still re-raised by
+        # Starlette's ServerErrorMiddleware so it reaches the server log.
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "internal_server_error",
+                    "message": "An unexpected error occurred.",
                 }
             },
         )
