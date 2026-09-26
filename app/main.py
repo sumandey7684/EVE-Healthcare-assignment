@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.auth import router as auth_router
+from app.api.bookings import router as bookings_router
 from app.api.centres import router as centres_router
 from app.api.health import router as health_router
 from app.api.tests import router as tests_router
@@ -18,3 +19,4 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(centres_router)
 app.include_router(tests_router)
+app.include_router(bookings_router)

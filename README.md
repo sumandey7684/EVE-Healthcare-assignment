@@ -2,7 +2,7 @@
 
 Diagnostic test booking and simulated payment API for the EVE Healthcare SDE Intern Backend Engineering Assignment.
 
-This repository is being built in small, verified phases. The current slice includes authentication plus diagnostic centre and test catalogue APIs.
+This repository is being built in small, verified phases. The current slice includes authentication, the diagnostic catalogue, and bookings.
 
 ## Tech stack
 
@@ -184,6 +184,52 @@ Optional development seed. It does not run at application startup:
 
 This creates 2 centres, 3 tests, and a few centre-specific prices. It skips rows that already exist.
 
+## Bookings
+
+All booking endpoints require a valid JWT. A user can only list, view, or cancel their own bookings. Another user's booking ID returns `403`.
+
+The client never sends an amount. The backend copies `CentreTest.price` into `Booking.amount` at create time. Later catalogue price changes do not update existing bookings.
+
+### Endpoints
+
+```powershell
+curl -X POST http://127.0.0.1:8000/bookings `
+  -H "Authorization: Bearer <access_token>" `
+  -H "Content-Type: application/json" `
+  -d "{\"centre_id\":\"<centre_id>\",\"test_id\":\"<test_id>\",\"appointment_at\":\"2026-10-10T10:00:00Z\"}"
+
+curl http://127.0.0.1:8000/bookings -H "Authorization: Bearer <access_token>"
+curl http://127.0.0.1:8000/bookings/<booking_id> -H "Authorization: Bearer <access_token>"
+curl -X POST http://127.0.0.1:8000/bookings/<booking_id>/cancel -H "Authorization: Bearer <access_token>"
+```
+
+Example create response:
+
+```json
+{
+  "id": "...",
+  "user_id": "...",
+  "centre_id": "...",
+  "test_id": "...",
+  "appointment_at": "2026-10-10T10:00:00Z",
+  "amount": 450.0,
+  "status": "PENDING"
+}
+```
+
+### Lifecycle
+
+- New bookings are created as `PENDING`.
+- The owner can cancel a `PENDING` booking. It becomes `CANCELLED`.
+- `CONFIRMED` and `FAILED` are reserved for payment (not implemented yet).
+- Invalid transitions return `409`. A cancelled or failed booking cannot be cancelled again.
+
+### Duplicate bookings
+
+A user cannot create a second **active** booking (`PENDING` or `CONFIRMED`) for the same centre, test, and appointment time. After cancellation they can book that slot again.
+
+This is an application-level check, not a unique database constraint. A unique index on those columns would block legitimate rebooking after `CANCELLED` or `FAILED`. A partial unique index would work, but that extra migration is not needed for this slice.
+
 ## How to run with Docker
 
 ```powershell
@@ -213,8 +259,8 @@ Implemented:
 - `GET /health`
 - User signup, login, and JWT-protected `GET /auth/me`
 - Diagnostic centres, tests, and centre-specific prices
+- Authenticated bookings with owner-only access and price snapshots
 
 Not implemented yet:
 
-- Booking APIs
 - Simulated payments and webhook idempotency
