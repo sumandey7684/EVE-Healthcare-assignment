@@ -8,7 +8,12 @@ from app.schemas.catalogue import (
     TestCreateRequest,
     TestPublic,
 )
-from app.schemas.payment import PaymentCreateRequest, PaymentPublic
+from app.schemas.payment import (
+    PaymentCreateRequest,
+    PaymentPublic,
+    WebhookEventRequest,
+    WebhookEventResponse,
+)
 from app.schemas.user import UserPublic, UserSignupRequest
 
 __all__ = [
@@ -26,4 +31,6 @@ __all__ = [
     "TokenResponse",
     "UserPublic",
     "UserSignupRequest",
+    "WebhookEventRequest",
+    "WebhookEventResponse",
 ]

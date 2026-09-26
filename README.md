@@ -2,7 +2,7 @@
 
 Diagnostic test booking and simulated payment API for the EVE Healthcare SDE Intern Backend Engineering Assignment.
 
-This repository is being built in small, verified phases. The current slice includes authentication, the diagnostic catalogue, bookings, and simulated payments.
+This repository is being built in small, verified phases. The current slice includes authentication, the catalogue, bookings, simulated payments, and an idempotent payment webhook.
 
 ## Tech stack
 
@@ -263,7 +263,45 @@ Example response:
 - Missing booking → `404`
 - `CANCELLED`, `CONFIRMED`, or `FAILED` booking → `409`
 
-`provider_event_id` is unused here. The payment webhook will use it in a later phase.
+`POST /payments` creates a payment **without** `provider_event_id`. The webhook is a separate simulated provider callback.
+
+## Payment webhook
+
+`POST /payments/webhook` is unauthenticated. It represents an external provider event, not a user action.
+
+```powershell
+curl -X POST http://127.0.0.1:8000/payments/webhook `
+  -H "Content-Type: application/json" `
+  -d "{\"event_id\":\"evt_12345\",\"booking_id\":\"<booking_id>\",\"status\":\"SUCCESS\",\"amount\":450.00}"
+```
+
+`status` must be `SUCCESS` or `FAILED`. The webhook amount is compared with `Booking.amount` and rejected on mismatch. The stored payment amount is always the booking snapshot.
+
+### Idempotency
+
+`event_id` is stored on `payments.provider_event_id`, which has a database UNIQUE constraint.
+
+1. Look up the event id.
+2. If it already exists, return `{"status":"already_processed"}` and do not change the booking.
+3. Otherwise create/link the payment and update the booking in one transaction.
+4. If two requests race, the unique constraint raises a conflict. The loser rolls back and returns `already_processed`.
+
+Repeated deliveries of the same `event_id` do not create a second payment and do not change booking state again.
+
+### State transitions
+
+- `SUCCESS` on `PENDING` → `CONFIRMED`
+- `FAILED` on `PENDING` → `FAILED`
+- `CONFIRMED` → `FAILED`, `FAILED` → `CONFIRMED`, and any webhook against `CANCELLED` are rejected (`409`)
+- A replay of an already stored `event_id` is idempotent, not a transition error
+
+### Relationship with `POST /payments`
+
+Either path can settle a `PENDING` booking. They must not create two payments for the same provider event.
+
+- In-app `POST /payments` settles the booking and leaves `provider_event_id` empty.
+- A later webhook with the same `booking_id` and the returned `payment_id` attaches `event_id` to that payment and returns `already_processed`.
+- A later webhook with a **new** `event_id` and no matching `payment_id` is rejected if the booking is already terminal.
 
 ## How to run with Docker
 
@@ -296,7 +334,8 @@ Implemented:
 - Diagnostic centres, tests, and centre-specific prices
 - Authenticated bookings with owner-only access and price snapshots
 - Simulated `POST /payments` that confirms or fails a booking
+- Idempotent `POST /payments/webhook` using `provider_event_id`
 
 Not implemented yet:
 
-- Payment webhook idempotency
+- Bonus features such as Redis, Celery, or a real payment provider

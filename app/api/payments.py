@@ -4,10 +4,23 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import Payment, User
-from app.schemas.payment import PaymentCreateRequest, PaymentPublic
-from app.services.payment import simulate_payment
+from app.schemas.payment import (
+    PaymentCreateRequest,
+    PaymentPublic,
+    WebhookEventRequest,
+    WebhookEventResponse,
+)
+from app.services.payment import process_webhook, simulate_payment
 
 router = APIRouter(prefix="/payments", tags=["payments"])
+
+
+@router.post("/webhook", response_model=WebhookEventResponse)
+def payment_webhook(
+    payload: WebhookEventRequest,
+    db: Session = Depends(get_db),
+) -> WebhookEventResponse:
+    return WebhookEventResponse(status=process_webhook(db, payload))
 
 
 @router.post("", response_model=PaymentPublic, status_code=201)
