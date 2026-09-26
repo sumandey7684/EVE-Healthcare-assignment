@@ -2,7 +2,7 @@
 
 Diagnostic test booking and simulated payment API for the EVE Healthcare SDE Intern Backend Engineering Assignment.
 
-This repository is being built in small, verified phases. The current slice includes authentication, the diagnostic catalogue, and bookings.
+This repository is being built in small, verified phases. The current slice includes authentication, the diagnostic catalogue, bookings, and simulated payments.
 
 ## Tech stack
 
@@ -221,14 +221,49 @@ Example create response:
 
 - New bookings are created as `PENDING`.
 - The owner can cancel a `PENDING` booking. It becomes `CANCELLED`.
-- `CONFIRMED` and `FAILED` are reserved for payment (not implemented yet).
-- Invalid transitions return `409`. A cancelled or failed booking cannot be cancelled again.
+- Simulated `POST /payments` with `SUCCESS` sets the booking to `CONFIRMED`.
+- Simulated `POST /payments` with `FAILED` sets the booking to `FAILED`.
+- Invalid transitions return `409`. A cancelled, confirmed, or failed booking cannot be paid or cancelled again.
 
 ### Duplicate bookings
 
 A user cannot create a second **active** booking (`PENDING` or `CONFIRMED`) for the same centre, test, and appointment time. After cancellation they can book that slot again.
 
 This is an application-level check, not a unique database constraint. A unique index on those columns would block legitimate rebooking after `CANCELLED` or `FAILED`. A partial unique index would work, but that extra migration is not needed for this slice.
+
+## Simulated payments
+
+`POST /payments` is authenticated and simulated. There is no Razorpay/Stripe integration.
+
+The owner must pay their own `PENDING` booking. The payment amount is copied from `Booking.amount`, never from the request. Payment creation and the booking status change happen in one database transaction.
+
+```powershell
+curl -X POST http://127.0.0.1:8000/payments `
+  -H "Authorization: Bearer <access_token>" `
+  -H "Content-Type: application/json" `
+  -d "{\"booking_id\":\"<booking_id>\",\"result\":\"SUCCESS\"}"
+```
+
+`result` must be `SUCCESS` or `FAILED`.
+
+Example response:
+
+```json
+{
+  "id": "...",
+  "booking_id": "...",
+  "amount": 450.0,
+  "status": "SUCCESS"
+}
+```
+
+- `SUCCESS` → booking becomes `CONFIRMED`
+- `FAILED` → booking becomes `FAILED`
+- Another user's booking → `403`
+- Missing booking → `404`
+- `CANCELLED`, `CONFIRMED`, or `FAILED` booking → `409`
+
+`provider_event_id` is unused here. The payment webhook will use it in a later phase.
 
 ## How to run with Docker
 
@@ -260,7 +295,8 @@ Implemented:
 - User signup, login, and JWT-protected `GET /auth/me`
 - Diagnostic centres, tests, and centre-specific prices
 - Authenticated bookings with owner-only access and price snapshots
+- Simulated `POST /payments` that confirms or fails a booking
 
 Not implemented yet:
 
-- Simulated payments and webhook idempotency
+- Payment webhook idempotency

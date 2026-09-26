@@ -8,6 +8,7 @@ from app.schemas.catalogue import (
     TestCreateRequest,
     TestPublic,
 )
+from app.schemas.payment import PaymentCreateRequest, PaymentPublic
 from app.schemas.user import UserPublic, UserSignupRequest
 
 __all__ = [
@@ -18,6 +19,8 @@ __all__ = [
     "CentreTestCreateRequest",
     "CentreTestPublic",
     "LoginRequest",
+    "PaymentCreateRequest",
+    "PaymentPublic",
     "TestCreateRequest",
     "TestPublic",
     "TokenResponse",
