@@ -2,7 +2,7 @@
 
 Diagnostic test booking and simulated payment API for the EVE Healthcare SDE Intern Backend Engineering Assignment.
 
-This repository is being built in small, verified phases. The current slice includes authentication, the catalogue, bookings, simulated payments, and an idempotent payment webhook.
+This repository is being built in small, verified phases. The current slice includes authentication, the catalogue, bookings, simulated payments, an idempotent payment webhook, and concurrency-safe settlement/booking constraints.
 
 ## Tech stack
 
@@ -75,7 +75,10 @@ Copy `.env.example` to `.env` and set a long random `JWT_SECRET_KEY`. Do not com
 JWT_SECRET_KEY=change-me-to-a-long-random-string
 JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+WEBHOOK_SECRET=change-me-webhook-secret
 ```
+
+`WEBHOOK_SECRET` must be at least 16 characters. `POST /payments/webhook` requires it in the `X-Webhook-Secret` header.
 
 ### Sign up
 
@@ -229,13 +232,13 @@ Example create response:
 
 A user cannot create a second **active** booking (`PENDING` or `CONFIRMED`) for the same centre, test, and appointment time. After cancellation they can book that slot again.
 
-This is an application-level check, not a unique database constraint. A unique index on those columns would block legitimate rebooking after `CANCELLED` or `FAILED`. A partial unique index would work, but that extra migration is not needed for this slice.
+The application check still returns `409 duplicate_booking`. A PostgreSQL partial unique index `uq_bookings_active_slot` on `(user_id, centre_id, test_id, appointment_at) WHERE status IN ('PENDING', 'CONFIRMED')` also rejects concurrent inserts that both pass the read check. `CANCELLED` and `FAILED` rows are excluded, so the slot can be booked again.
 
 ## Simulated payments
 
 `POST /payments` is authenticated and simulated. There is no Razorpay/Stripe integration.
 
-The owner must pay their own `PENDING` booking. The payment amount is copied from `Booking.amount`, never from the request. Payment creation and the booking status change happen in one database transaction.
+The owner must pay their own `PENDING` booking. The payment amount is copied from `Booking.amount`, never from the request. Payment creation and the booking status change happen in one database transaction. The booking row is locked with `SELECT ... FOR UPDATE`, and `payments.booking_id` is UNIQUE, so concurrent `POST /payments` requests cannot settle the same booking twice.
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/payments `
@@ -267,11 +270,12 @@ Example response:
 
 ## Payment webhook
 
-`POST /payments/webhook` is unauthenticated. It represents an external provider event, not a user action.
+`POST /payments/webhook` is not a user JWT endpoint. It requires the shared `WEBHOOK_SECRET` in the `X-Webhook-Secret` header. A missing or incorrect secret returns `401 invalid_webhook_secret`.
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/payments/webhook `
   -H "Content-Type: application/json" `
+  -H "X-Webhook-Secret: <WEBHOOK_SECRET>" `
   -d "{\"event_id\":\"evt_12345\",\"booking_id\":\"<booking_id>\",\"status\":\"SUCCESS\",\"amount\":450.00}"
 ```
 
@@ -283,8 +287,9 @@ curl -X POST http://127.0.0.1:8000/payments/webhook `
 
 1. Look up the event id.
 2. If it already exists, return `{"status":"already_processed"}` and do not change the booking.
-3. Otherwise create/link the payment and update the booking in one transaction.
-4. If two requests race, the unique constraint raises a conflict. The loser rolls back and returns `already_processed`.
+3. Lock the booking row, then look up the event id again so a concurrent replay cannot miss the insert.
+4. Otherwise create/link the payment and update the booking in one transaction.
+5. If two requests still race, `uq_payments_provider_event_id` or `uq_payments_booking_id` raises a conflict. The loser rolls back and returns `already_processed`.
 
 Repeated deliveries of the same `event_id` do not create a second payment and do not change booking state again.
 
@@ -309,7 +314,7 @@ Either path can settle a `PENDING` booking. They must not create two payments fo
 docker compose up --build
 ```
 
-This starts PostgreSQL and the FastAPI application. The API is available at `http://127.0.0.1:8000`.
+This starts PostgreSQL and the FastAPI application. The API container runs `alembic upgrade head` before uvicorn, so a fresh Compose database receives the current schema automatically. The API is available at `http://127.0.0.1:8000`.
 
 If you already have PostgreSQL running on host port 5432, keep the Compose host mapping at 5433 (the default in this repo) and point local `DATABASE_URL` at `localhost:5433`.
 
@@ -335,6 +340,8 @@ Implemented:
 - Authenticated bookings with owner-only access and price snapshots
 - Simulated `POST /payments` that confirms or fails a booking
 - Idempotent `POST /payments/webhook` using `provider_event_id`
+- Shared webhook secret, one payment per booking, and a partial unique index on active booking slots
+- Docker Compose schema initialization via Alembic on API startup
 
 Not implemented yet:
 

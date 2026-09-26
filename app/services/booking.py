@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import AppError
@@ -75,7 +76,17 @@ def create_booking(db: Session, user: User, payload: BookingCreateRequest) -> Bo
         status=BookingStatus.PENDING,
     )
     db.add(booking)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if "uq_bookings_active_slot" in str(getattr(exc, "orig", exc)):
+            raise AppError(
+                status_code=409,
+                code="duplicate_booking",
+                message="An active booking already exists for this centre, test, and appointment time.",
+            ) from exc
+        raise
     db.refresh(booking)
     return booking
 
@@ -90,8 +101,17 @@ def list_bookings(db: Session, user: User) -> list[Booking]:
     )
 
 
-def get_owned_booking(db: Session, user: User, booking_id: UUID) -> Booking:
-    booking = db.get(Booking, booking_id)
+def get_owned_booking(
+    db: Session,
+    user: User,
+    booking_id: UUID,
+    *,
+    for_update: bool = False,
+) -> Booking:
+    statement = select(Booking).where(Booking.id == booking_id)
+    if for_update:
+        statement = statement.with_for_update()
+    booking = db.scalar(statement)
     if booking is None:
         raise AppError(
             status_code=404,

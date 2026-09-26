@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(min_length=16)
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
+    webhook_secret: str = Field(min_length=16)
 
 
 @lru_cache

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_webhook_secret
 from app.database import get_db
 from app.models import Payment, User
 from app.schemas.payment import (
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 def payment_webhook(
     payload: WebhookEventRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(require_webhook_secret),
 ) -> WebhookEventResponse:
     return WebhookEventResponse(status=process_webhook(db, payload))
 

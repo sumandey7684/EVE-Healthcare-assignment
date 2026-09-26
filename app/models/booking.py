@@ -6,7 +6,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, func, text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,6 +28,17 @@ class BookingStatus(str, Enum):
 
 class Booking(Base):
     __tablename__ = "bookings"
+    __table_args__ = (
+        Index(
+            "uq_bookings_active_slot",
+            "user_id",
+            "centre_id",
+            "test_id",
+            "appointment_at",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'CONFIRMED')"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(

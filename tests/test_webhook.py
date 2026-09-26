@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Booking, Payment
+from app.config import settings
+from app.models import Payment
 
 FUTURE_APPOINTMENT = "2026-10-10T10:00:00Z"
 
@@ -22,6 +23,10 @@ def _auth_headers(client: TestClient, email: str) -> dict[str, str]:
         json={"email": email, "password": "StrongPassword123"},
     ).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def _webhook_headers() -> dict[str, str]:
+    return {"X-Webhook-Secret": settings.webhook_secret}
 
 
 def _create_pending_booking(client: TestClient, headers: dict[str, str], price: str = "450.00") -> dict:
@@ -64,11 +69,40 @@ def _webhook_payload(booking: dict, **overrides) -> dict:
     return payload
 
 
-def test_success_webhook(client: TestClient) -> None:
+def test_webhook_rejects_missing_secret(client: TestClient) -> None:
     headers = _auth_headers(client, "owner@example.com")
     booking = _create_pending_booking(client, headers)
 
     response = client.post("/payments/webhook", json=_webhook_payload(booking))
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "invalid_webhook_secret"
+
+
+def test_webhook_rejects_invalid_secret(client: TestClient) -> None:
+    headers = _auth_headers(client, "owner@example.com")
+    booking = _create_pending_booking(client, headers)
+
+    response = client.post(
+        "/payments/webhook",
+        json=_webhook_payload(booking),
+        headers={"X-Webhook-Secret": "definitely-not-the-webhook-secret"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "invalid_webhook_secret"
+    assert client.get(f"/bookings/{booking['id']}", headers=headers).json()["status"] == "PENDING"
+
+
+def test_success_webhook(client: TestClient) -> None:
+    headers = _auth_headers(client, "owner@example.com")
+    booking = _create_pending_booking(client, headers)
+
+    response = client.post(
+        "/payments/webhook",
+        json=_webhook_payload(booking),
+        headers=_webhook_headers(),
+    )
 
     assert response.status_code == 200
     assert response.json() == {"status": "processed"}
@@ -81,6 +115,7 @@ def test_failed_webhook(client: TestClient) -> None:
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, status="FAILED"),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 200
@@ -93,7 +128,7 @@ def test_invalid_event(client: TestClient) -> None:
     payload = _webhook_payload(booking)
     payload.pop("event_id")
 
-    response = client.post("/payments/webhook", json=payload)
+    response = client.post("/payments/webhook", json=payload, headers=_webhook_headers())
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
@@ -106,6 +141,7 @@ def test_invalid_booking(client: TestClient) -> None:
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, booking_id=str(uuid4())),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 404
@@ -119,6 +155,7 @@ def test_invalid_status(client: TestClient) -> None:
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, status="MAYBE"),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 422
@@ -132,6 +169,7 @@ def test_amount_mismatch(client: TestClient) -> None:
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, amount=999.00),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 409
@@ -142,7 +180,7 @@ def test_success_changes_pending_to_confirmed(client: TestClient) -> None:
     headers = _auth_headers(client, "owner@example.com")
     booking = _create_pending_booking(client, headers)
 
-    client.post("/payments/webhook", json=_webhook_payload(booking))
+    client.post("/payments/webhook", json=_webhook_payload(booking), headers=_webhook_headers())
     updated = client.get(f"/bookings/{booking['id']}", headers=headers)
 
     assert updated.json()["status"] == "CONFIRMED"
@@ -152,7 +190,11 @@ def test_failed_changes_pending_to_failed(client: TestClient) -> None:
     headers = _auth_headers(client, "owner@example.com")
     booking = _create_pending_booking(client, headers)
 
-    client.post("/payments/webhook", json=_webhook_payload(booking, status="FAILED"))
+    client.post(
+        "/payments/webhook",
+        json=_webhook_payload(booking, status="FAILED"),
+        headers=_webhook_headers(),
+    )
     updated = client.get(f"/bookings/{booking['id']}", headers=headers)
 
     assert updated.json()["status"] == "FAILED"
@@ -161,11 +203,16 @@ def test_failed_changes_pending_to_failed(client: TestClient) -> None:
 def test_cannot_change_confirmed_to_failed(client: TestClient) -> None:
     headers = _auth_headers(client, "owner@example.com")
     booking = _create_pending_booking(client, headers)
-    client.post("/payments/webhook", json=_webhook_payload(booking, event_id="evt_success"))
+    client.post(
+        "/payments/webhook",
+        json=_webhook_payload(booking, event_id="evt_success"),
+        headers=_webhook_headers(),
+    )
 
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, event_id="evt_fail", status="FAILED"),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 409
@@ -179,11 +226,13 @@ def test_cannot_change_failed_to_confirmed(client: TestClient) -> None:
     client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, event_id="evt_fail", status="FAILED"),
+        headers=_webhook_headers(),
     )
 
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, event_id="evt_success", status="SUCCESS"),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 409
@@ -195,7 +244,11 @@ def test_cannot_change_cancelled_to_confirmed(client: TestClient) -> None:
     booking = _create_pending_booking(client, headers)
     client.post(f"/bookings/{booking['id']}/cancel", headers=headers)
 
-    response = client.post("/payments/webhook", json=_webhook_payload(booking))
+    response = client.post(
+        "/payments/webhook",
+        json=_webhook_payload(booking),
+        headers=_webhook_headers(),
+    )
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "invalid_booking_status"
@@ -207,8 +260,8 @@ def test_same_webhook_sent_twice(client: TestClient, db_session: Session) -> Non
     booking = _create_pending_booking(client, headers)
     payload = _webhook_payload(booking)
 
-    first = client.post("/payments/webhook", json=payload)
-    second = client.post("/payments/webhook", json=payload)
+    first = client.post("/payments/webhook", json=payload, headers=_webhook_headers())
+    second = client.post("/payments/webhook", json=payload, headers=_webhook_headers())
 
     assert first.json() == {"status": "processed"}
     assert second.json() == {"status": "already_processed"}
@@ -222,7 +275,10 @@ def test_same_webhook_sent_multiple_times(client: TestClient, db_session: Sessio
     booking = _create_pending_booking(client, headers)
     payload = _webhook_payload(booking)
 
-    statuses = [client.post("/payments/webhook", json=payload).json()["status"] for _ in range(4)]
+    statuses = [
+        client.post("/payments/webhook", json=payload, headers=_webhook_headers()).json()["status"]
+        for _ in range(4)
+    ]
 
     assert statuses[0] == "processed"
     assert statuses[1:] == ["already_processed"] * 3
@@ -238,7 +294,7 @@ def test_duplicate_event_id_protected_by_database_constraint(
 ) -> None:
     headers = _auth_headers(client, "owner@example.com")
     first = _create_pending_booking(client, headers)
-    client.post("/payments/webhook", json=_webhook_payload(first))
+    client.post("/payments/webhook", json=_webhook_payload(first), headers=_webhook_headers())
 
     centre = client.post(
         "/centres",
@@ -304,6 +360,7 @@ def test_webhook_correlates_existing_simulated_payment(
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, payment_id=payment["id"]),
+        headers=_webhook_headers(),
     )
 
     payments = list(db_session.scalars(select(Payment).where(Payment.booking_id == booking["id"])).all())
@@ -320,6 +377,7 @@ def test_invalid_payment_id(client: TestClient) -> None:
     response = client.post(
         "/payments/webhook",
         json=_webhook_payload(booking, payment_id=str(uuid4())),
+        headers=_webhook_headers(),
     )
 
     assert response.status_code == 404

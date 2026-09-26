@@ -25,6 +25,7 @@ class Payment(Base):
     __tablename__ = "payments"
     __table_args__ = (
         UniqueConstraint("provider_event_id", name="uq_payments_provider_event_id"),
+        UniqueConstraint("booking_id", name="uq_payments_booking_id"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

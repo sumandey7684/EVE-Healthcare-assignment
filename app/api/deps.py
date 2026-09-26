@@ -1,8 +1,11 @@
+import hmac
+
 from fastapi import Depends, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.errors import AppError
 from app.models import User
@@ -44,3 +47,14 @@ def get_current_user(
             message="The user for this token no longer exists.",
         )
     return user
+
+
+def require_webhook_secret(x_webhook_secret: str | None = Header(default=None)) -> None:
+    provided = (x_webhook_secret or "").encode("utf-8")
+    expected = settings.webhook_secret.encode("utf-8")
+    if not hmac.compare_digest(provided, expected):
+        raise AppError(
+            status_code=401,
+            code="invalid_webhook_secret",
+            message="Webhook secret is missing or invalid.",
+        )
