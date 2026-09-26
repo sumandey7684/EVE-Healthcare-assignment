@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 
 from app.api.auth import router as auth_router
+from app.api.centres import router as centres_router
 from app.api.health import router as health_router
+from app.api.tests import router as tests_router
 from app.config import settings
 from app.errors import register_error_handlers
 
@@ -14,3 +16,5 @@ app = FastAPI(
 register_error_handlers(app)
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(centres_router)
+app.include_router(tests_router)

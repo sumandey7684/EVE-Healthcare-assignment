@@ -1,4 +1,6 @@
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,6 +17,20 @@ class AppError(Exception):
 _SENSITIVE_FIELDS = {"password"}
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Exception):
+        return str(value)
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _sanitize_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     sanitized: list[dict[str, Any]] = []
     for error in errors:
@@ -22,7 +38,7 @@ def _sanitize_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, 
         location = item.get("loc", ())
         if any(part in _SENSITIVE_FIELDS for part in location):
             item.pop("input", None)
-        sanitized.append(item)
+        sanitized.append(_json_safe(item))
     return sanitized
 
 
