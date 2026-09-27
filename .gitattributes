@@ -1,0 +1,6 @@
+# Shell scripts run inside the Linux container; CRLF checkout on Windows
+# produces "exec ... no such file or directory" (the shebang becomes /bin/sh\r).
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
